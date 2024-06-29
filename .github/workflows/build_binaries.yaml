@@ -1,0 +1,69 @@
+name: Build QMK firmware
+
+on: [push, workflow_dispatch]
+
+permissions:
+    contents: write
+
+jobs:
+    build:
+        name: "QMK Userspace Build"
+        uses: qmk/.github/.github/workflows/qmk_userspace_build.yml@main
+        with:
+            qmk_repo: qmk/qmk_firmware
+            qmk_ref: master
+            preparation_command: |
+                qmk c2json -kb crkbd -km vbt > keyboard_layout.bin # A Hack
+                qmk c2json -kb ploopyco/madromys -km vbt > trackpad_layout.bin # A Hack
+
+    publish:
+        name: "Generate layout images and publish the firmware"
+        needs: build
+        permissions: write-all
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Download artifacts
+              if: always() && !cancelled()
+              uses: actions/download-artifact@v4
+              with:
+                  name: Firmware
+
+            - run: mv keyboard_layout.bin crkbd_rev1_vbt_keymap.json
+
+            - run: mv trackpad_layout.bin ploopyco_madromys_rev1_001_vbt.json
+
+            - name: Install keymap-drawer (pypi)
+              run: python3 -m pip install keymap-drawer
+
+            - name: Generate Keyboard Keymap Layout SVG using keymap-drawer
+              run: ./.github/generate_keymap_drawer.sh ./crkbd_rev1_vbt_keymap.json crkbd_rev1_vbt
+
+            - name: Generate Trackpad Keymap Layout SVG using keymap-drawer
+              run: ./.github/generate_keymap_drawer.sh ploopyco_madromys_rev1_001_vbt.json ploopyco_madromys_rev1_001_vbt
+
+            - name: Install Inkscape
+              run: sudo apt install -y inkscape
+
+            - run: sudo apt install -y gsfonts gsfonts-other
+
+            - name: Generate Keymap Layout PNGs from Generated SVGs
+              run: |
+                  inkscape --export-background-opacity=0  ./crkbd_rev1_vbt_dark.svg -o crkbd_rev1_vbt_dark.png
+                  inkscape --export-background-opacity=0  ./crkbd_rev1_vbt_light.svg -o crkbd_rev1_vbt_light.png
+                  inkscape --export-background-opacity=0  ./ploopyco_madromys_rev1_001_vbt_dark.svg -o ploopyco_madromys_rev1_001_vbt_dark.png
+                  inkscape --export-background-opacity=0  ./ploopyco_madromys_rev1_001_vbt_light.svg -o ploopyco_madromys_rev1_001_vbt_light.png
+
+            - name: Publish Releases
+              continue-on-error: true
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  gh config set prompt disabled
+                  gh release create $(date +%s) --latest --generate-notes *.uf2 *.svg *.png crkbd_rev1_vbt_keymap.json ploopyco_madromys_rev1_001_vbt.json
+
+            - uses: geekyeggo/delete-artifact@v5
+              with:
+                  name: Firmware
